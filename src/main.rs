@@ -15,9 +15,13 @@ pub struct GraphWindow {
     graph_center: (f32, f32),
     tick: (f32, f32),
     tick_size: f32,
+    vec_size: f32,
 }
 
 type Line = fn(f32) -> f32;
+
+// This is an ODE of degree one of the form dx/dt = f(x) (ẋ = f(x))
+type OrdinaryDegreeOneDiffEq = fn(f32) -> f32;
 
 impl GraphWindow {
     fn to_sdl(&self) -> (Canvas<Window>, Sdl) {
@@ -147,24 +151,174 @@ impl GraphWindow {
         let x_offset = x_pixels_per_unit * self.graph_center.0;
         let x = (self.window_size.0 as f32 / 2.) - x_offset;
 
-        let mut curr = (beg_x, line(beg_x));
+        let mut curr = (beg_x, -line(beg_x));
         while curr.0 < end_x {
             let next = (curr.0 + dx, -line(curr.0 + dx));
-            let curr_disp = ((curr.0 * x_pixels_per_unit) + x, (curr.1 * y_pixels_per_unit) + y);
-            let next_disp = ((next.0 * x_pixels_per_unit) + x, (next.1 * y_pixels_per_unit) + y);
+            let curr_disp = (
+                (curr.0 * x_pixels_per_unit) + x,
+                (curr.1 * y_pixels_per_unit) + y,
+            );
+            let next_disp = (
+                (next.0 * x_pixels_per_unit) + x,
+                (next.1 * y_pixels_per_unit) + y,
+            );
+            if !next.0.is_finite() || !next.1.is_finite() {
+                curr.0 += dx;
+                continue;
+            }
+            if (next.1 - curr.1).abs() > self.axes_size.1 {
+                curr = next;
+                continue;
+            }
             canvas.draw_line(curr_disp, next_disp).unwrap();
             curr = next;
         }
+    }
+
+    fn render_line_domain(
+        &self,
+        line: Line,
+        domain: (f32, f32),
+        canvas: &mut Canvas<Window>,
+        dx: f32,
+        color: Color,
+    ) {
+        canvas.set_draw_color(color);
+        let beg_x = domain.0;
+        let end_x = domain.1;
+
+        let y_pixels_per_unit = self.window_size.1 as f32 / self.axes_size.1;
+        let y_offset = y_pixels_per_unit * self.graph_center.1;
+        let y = (self.window_size.1 as f32 / 2.) + y_offset;
+
+        let x_pixels_per_unit = self.window_size.0 as f32 / self.axes_size.0;
+        let x_offset = x_pixels_per_unit * self.graph_center.0;
+        let x = (self.window_size.0 as f32 / 2.) - x_offset;
+
+        let mut curr = (beg_x, -line(beg_x));
+        while curr.0 < end_x {
+            let next = (curr.0 + dx, -line(curr.0 + dx));
+            let curr_disp = (
+                (curr.0 * x_pixels_per_unit) + x,
+                (curr.1 * y_pixels_per_unit) + y,
+            );
+            let next_disp = (
+                (next.0 * x_pixels_per_unit) + x,
+                (next.1 * y_pixels_per_unit) + y,
+            );
+            if !next.0.is_finite() || !next.1.is_finite() {
+                curr.0 += dx;
+                continue;
+            }
+            canvas.draw_line(curr_disp, next_disp).unwrap();
+            curr = next;
+        }
+    }
+
+    fn render_vector_field(&self, dxdt: OrdinaryDegreeOneDiffEq, canvas: &mut Canvas<Window>) {
+        let mut y_0 = 0.0;
+        let mut x_0 = 0.0;
+
+        let mut vec = Vec::new();
+        while y_0 < self.axes_size.1 / 2.0 {
+            while x_0 < self.axes_size.0 / 2.0 {
+                vec.push((x_0, y_0));
+                x_0 += self.tick.0;
+            }
+            y_0 += self.tick.1;
+            x_0 = 0.0;
+        }
+        x_0 = -self.tick.0;
+        y_0 = 0.0;
+        while y_0 < self.axes_size.1 / 2.0 {
+            while x_0 >= -self.axes_size.0 / 2.0 {
+                vec.push((x_0, y_0));
+                x_0 -= self.tick.0;
+            }
+            y_0 += self.tick.1;
+            x_0 = 0.0;
+        }
+        x_0 = 0.0;
+        y_0 = -self.tick.1;
+        while y_0 >= -self.axes_size.1 / 2.0 {
+            while x_0 < self.axes_size.0 / 2.0 {
+                vec.push((x_0, y_0));
+                x_0 += self.tick.0;
+            }
+            y_0 -= self.tick.1;
+            x_0 = 0.0;
+        }
+        x_0 = -self.tick.0;
+        y_0 = -self.tick.1;
+        while y_0 >= -self.axes_size.1 / 2.0 {
+            while x_0 >= -self.axes_size.0 / 2.0 {
+                vec.push((x_0, y_0));
+                x_0 -= self.tick.0;
+            }
+            y_0 -= self.tick.1;
+            x_0 = 0.0;
+        }
+
+        self.render_vec_field(dxdt, vec, canvas);
+    }
+
+    fn render_vec_field(
+        &self,
+        dxdt: OrdinaryDegreeOneDiffEq,
+        vec: Vec<(f32, f32)>,
+        canvas: &mut Canvas<Window>,
+    ) {
+        let vec: Vec<_> = vec.iter().map(|&coord| (coord, dxdt(coord.0))).collect();
+
+        let y_pixels_per_unit = self.window_size.1 as f32 / self.axes_size.1;
+        let y_offset = y_pixels_per_unit * self.graph_center.1;
+        let y = (self.window_size.1 as f32 / 2.) + y_offset;
+
+        let x_pixels_per_unit = self.window_size.0 as f32 / self.axes_size.0;
+        let x_offset = x_pixels_per_unit * self.graph_center.0;
+        let x = (self.window_size.0 as f32 / 2.) - x_offset;
+
+        let min_color = Color::GREEN;
+        let max_color = Color::RED;
+        let dx_min = vec.iter().map(|val| val.1.abs()).reduce(f32::min).unwrap();
+        let dx_max = vec.iter().map(|val| val.1.abs()).reduce(f32::max).unwrap();
+
+        let color = |x: f32| -> Color {
+            let grad_val = (x - dx_min) / (dx_max - dx_min);
+
+            Color::RGB(
+                (grad_val * min_color.r as f32) as u8 + ((1. - grad_val) * max_color.r as f32) as u8,
+                (grad_val * min_color.g as f32) as u8 + ((1. - grad_val) * max_color.g as f32) as u8,
+                (grad_val * min_color.b as f32) as u8 + ((1. - grad_val) * max_color.b as f32) as u8,
+            )
+        };
+
+        vec.into_iter().for_each(|((x_v, y_v), x_dot)| {
+            let theta = f32::atan(x_dot);
+
+            let x_len = self.vec_size * f32::cos(theta);
+            let y_len = self.vec_size * f32::sin(theta);
+
+            let (x_0, y_0) = (x_v - x_len / 2.0, y_v - y_len / 2.0);
+            let (x_1, y_1) = (x_v + x_len / 2.0, y_v + y_len / 2.0);
+
+            let p0 = ((x_0 * x_pixels_per_unit) + x, (-y_0 * y_pixels_per_unit) + y);
+            let p1 = ((x_1 * x_pixels_per_unit) + x, (-y_1 * y_pixels_per_unit) + y);
+
+            canvas.set_draw_color(color(x_dot.abs()));
+            canvas.draw_line(p0, p1).unwrap();
+        });
     }
 }
 
 pub fn main() {
     let mut graph = GraphWindow {
         window_size: (1280, 720),
-        axes_size: (18., 2.),
+        axes_size: (12., 9.),
         graph_center: (0.0, 0.0),
-        tick: (f32::consts::PI / 2.0, 0.5),
+        tick: (f32::consts::PI / 6.0, 0.25),
         tick_size: 6.0,
+        vec_size: 0.2,
     };
 
     let (mut canvas, sdl_context) = graph.to_sdl();
@@ -183,10 +337,7 @@ pub fn main() {
                     keycode: Some(Keycode::Escape | Keycode::Q),
                     ..
                 } => break 'running,
-                Event::MouseWheel {
-                    y,
-                    ..
-                } => {
+                Event::MouseWheel { y, .. } => {
                     graph.axes_size.0 *= (1.05f32).powf(-y);
                     graph.axes_size.1 *= (1.05f32).powf(-y);
                 }
@@ -214,10 +365,29 @@ pub fn main() {
         }
 
         graph.render_to_canvas(&mut canvas);
-        graph.render_line(f32::cos, &mut canvas, 0.01, Color::RED);
-        graph.render_line(f32::sin, &mut canvas, 0.01, Color::BLUE);
-        graph.render_line(|x| -f32::sin(x), &mut canvas, 0.01, Color::GREEN);
-        graph.render_line(|x| -f32::cos(x), &mut canvas, 0.01, Color::YELLOW);
+        // graph.render_line(f32::cos, &mut canvas, 0.01, Color::RED);
+        // graph.render_line(f32::tan, &mut canvas, 0.01, Color::RED);
+        // graph.render_line(f32::tanh, &mut canvas, 0.01, Color::BLUE);
+        // graph.render_line(f32::sinh, &mut canvas, 0.01, Color::BLUE);
+        // graph.render_line(f32::exp, &mut canvas, 0.01, Color::YELLOW);
+        // graph.render_line_domain(f32::ln, (0.05, 1000.), &mut canvas, 0.01, Color::YELLOW);
+        // graph.render_line_domain(
+        //     |x| f32::sqrt(4.0 + -x.powi(2)),
+        //     (-2., 2.),
+        //     &mut canvas,
+        //     0.01,
+        //     Color::GREEN,
+        // );
+        // graph.render_line_domain(
+        //     |x| -f32::sqrt(4.0 + -x.powi(2)),
+        //     (-2., 2.),
+        //     &mut canvas,
+        //     0.01,
+        //     Color::GREEN,
+        // );
+        // graph.render_vector_field(|x| f32::exp(-x) * f32::sin(x), &mut canvas);
+        graph.render_vector_field(|x| 1.0 - x.powf(14.), &mut canvas);
+        graph.render_vector_field(|x| x / f32::sqrt(4.0 - x.powi(2)), &mut canvas);
         canvas.present();
     }
 }
