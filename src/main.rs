@@ -215,7 +215,7 @@ impl GraphWindow {
         }
     }
 
-    fn render_vector_field(&self, dxdt: OrdinaryDegreeOneDiffEq, canvas: &mut Canvas<Window>) {
+    fn render_vector_field_dxdy(&self, dxdt: OrdinaryDegreeOneDiffEq, canvas: &mut Canvas<Window>) {
         let mut y_0 = 0.0;
         let mut x_0 = 0.0;
 
@@ -236,7 +236,7 @@ impl GraphWindow {
                 x_0 -= self.tick.0;
             }
             y_0 += self.tick.1;
-            x_0 = 0.0;
+            x_0 = -self.tick.0;
         }
         x_0 = 0.0;
         y_0 = -self.tick.1;
@@ -256,13 +256,25 @@ impl GraphWindow {
                 x_0 -= self.tick.0;
             }
             y_0 -= self.tick.1;
-            x_0 = 0.0;
+            x_0 = -self.tick.0;
         }
 
-        self.render_vec_field(dxdt, vec, canvas);
+        self.render_vec_field_dxdy(dxdt, vec, canvas);
     }
 
-    fn render_vec_field(
+    fn render_vector_field_dxdt(
+        &self,
+        dxdt: OrdinaryDegreeOneDiffEq,
+        dt: f32,
+        canvas: &mut Canvas<Window>,
+    ) {
+        let x_pos_end =  self.axes_size.1 / 2. + self.graph_center.1;
+        let x_neg_end = -self.axes_size.1 / 2. + self.graph_center.1;
+
+        let y_end = self.axes_size.0 + self.graph_center.0;
+    }
+
+    fn render_vec_field_dxdy(
         &self,
         dxdt: OrdinaryDegreeOneDiffEq,
         vec: Vec<(f32, f32)>,
@@ -385,9 +397,11 @@ pub fn main() {
         //     0.01,
         //     Color::GREEN,
         // );
-        // graph.render_vector_field(|x| f32::exp(-x) * f32::sin(x), &mut canvas);
-        graph.render_vector_field(|x| 1.0 - x.powf(14.), &mut canvas);
-        graph.render_vector_field(|x| x / f32::sqrt(4.0 - x.powi(2)), &mut canvas);
+        // graph.render_vector_field_dxdy(|x| f32::exp(-x) * f32::sin(x), &mut canvas);
+        // graph.render_vector_field_dxdy(|x| 1.0 - x.powf(14.), &mut canvas);
+        // graph.render_vector_field(|x| x / f32::sqrt(4.0 - x.powi(2)), &mut canvas);
+        graph.render_vector_field_dxdy(|x| 2.0 * x, &mut canvas);
+        graph.render_line(|x| x.powi(2), &mut canvas, 0.01, Color::BLUE);
         canvas.present();
     }
 }
