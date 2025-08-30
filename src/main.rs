@@ -268,10 +268,71 @@ impl GraphWindow {
         dt: f32,
         canvas: &mut Canvas<Window>,
     ) {
-        let x_pos_end =  self.axes_size.1 / 2. + self.graph_center.1;
-        let x_neg_end = -self.axes_size.1 / 2. + self.graph_center.1;
+        let y_pixels_per_unit = self.window_size.1 as f32 / self.axes_size.1;
+        let y_offset = y_pixels_per_unit * self.graph_center.1;
+        let y_t = (self.window_size.1 as f32 / 2.) + y_offset;
 
-        let y_end = self.axes_size.0 + self.graph_center.0;
+        let x_pixels_per_unit = self.window_size.0 as f32 / self.axes_size.0;
+        let x_offset = x_pixels_per_unit * self.graph_center.0;
+        let x_t = (self.window_size.0 as f32 / 2.) - x_offset;
+
+        let x_max =  self.axes_size.1 + self.graph_center.1;
+        let x_end = -self.axes_size.1 + self.graph_center.1;
+
+        let t_beg = (self.graph_center.0 - self.axes_size.0 / 2.0).max(0.0);
+        let t_end = (self.graph_center.0 + self.axes_size.0 / 2.0).max(0.0);
+        // `dxdt` calculates the change in x (the vertical axis) based on the
+        // horizontal axis (t)
+        let mut vec: Vec<f32> = Vec::new();
+        let mut x_val = x_end - (x_end.rem_euclid(self.tick.1));
+        while x_val <= x_max {
+            vec.push(x_val);
+            x_val += self.tick.1;
+        }
+
+        let mut t = t_beg - (t_beg.rem_euclid(self.tick.0));
+        let mut min = f32::INFINITY;
+        let mut max = f32::NEG_INFINITY;
+
+        let mut lines = Vec::new();
+        while t < t_end {
+            for x in vec.iter_mut() {
+                // dxdt returns how many units x changes for one unit of t
+                // so we multiply by dt
+                let dx = dxdt(*x) * dt;
+                let abs = dx.abs();
+                min = min.min(abs);
+                max = max.max(abs);
+                let x_next = *x + dx;
+
+                lines.push((
+                    ((t * x_pixels_per_unit) + x_t, (-*x * y_pixels_per_unit) + y_t),
+                    (((t + dt) * x_pixels_per_unit) + x_t, (-x_next * y_pixels_per_unit) + y_t),
+                    abs
+                ));
+                *x = x_next;
+            }
+            t += dt;
+        }
+
+        let min_color = Color::RED;
+        let max_color = Color::GREEN;
+
+        let color = |x: f32| -> Color {
+            let grad_val = (x - min) / (max - min);
+
+            Color::RGB(
+                (grad_val * min_color.r as f32) as u8 + ((1. - grad_val) * max_color.r as f32) as u8,
+                (grad_val * min_color.g as f32) as u8 + ((1. - grad_val) * max_color.g as f32) as u8,
+                (grad_val * min_color.b as f32) as u8 + ((1. - grad_val) * max_color.b as f32) as u8,
+            )
+        };
+
+        for (t, x, dx) in lines {
+            canvas.set_draw_color(color(dx));
+            canvas.draw_line(t, x).unwrap();
+        }
+        
     }
 
     fn render_vec_field_dxdy(
@@ -328,7 +389,7 @@ pub fn main() {
         window_size: (1280, 720),
         axes_size: (12., 9.),
         graph_center: (0.0, 0.0),
-        tick: (f32::consts::PI / 6.0, 0.25),
+        tick: (0.25, f32::consts::PI / 12.),
         tick_size: 6.0,
         vec_size: 0.2,
     };
@@ -400,8 +461,11 @@ pub fn main() {
         // graph.render_vector_field_dxdy(|x| f32::exp(-x) * f32::sin(x), &mut canvas);
         // graph.render_vector_field_dxdy(|x| 1.0 - x.powf(14.), &mut canvas);
         // graph.render_vector_field(|x| x / f32::sqrt(4.0 - x.powi(2)), &mut canvas);
-        graph.render_vector_field_dxdy(|x| 2.0 * x, &mut canvas);
-        graph.render_line(|x| x.powi(2), &mut canvas, 0.01, Color::BLUE);
+        // graph.render_vector_field_dxdy(|x| 2.0 * x, &mut canvas);
+        // graph.render_line(|x| x.powi(2) - 4.0, &mut canvas, 0.01, Color::BLUE);
+        // graph.render_line(|x| 0.333333 * x.powi(3) - 1.2, &mut canvas, 0.01, Color::BLUE);
+        // graph.render_vector_field_dxdt(|x| 1.0 - x.powi(14), 0.01, &mut canvas);
+        graph.render_vector_field_dxdt(|x| f32::sin(x), 0.01, &mut canvas);
         canvas.present();
     }
 }
