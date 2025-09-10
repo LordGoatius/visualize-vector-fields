@@ -1,7 +1,9 @@
-use core::f32;
+#![feature(type_alias_impl_trait)]
+use std::time::Duration;
 
 use sdl3::event::Event;
 use sdl3::keyboard::Keycode;
+use sdl3::libc::sleep;
 use sdl3::mouse::MouseButton;
 use sdl3::pixels::Color;
 use sdl3::render::Canvas;
@@ -18,6 +20,7 @@ pub struct GraphWindow {
     vec_size: f32,
 }
 
+// type Line = impl Fn(f32) -> f32;
 type Line = fn(f32) -> f32;
 
 // This is an ODE of degree one of the form dx/dt = f(x) (ẋ = f(x))
@@ -262,11 +265,13 @@ impl GraphWindow {
         self.render_vec_field_dxdy(dxdt, vec, canvas);
     }
 
-    fn render_vector_field_dxdt(
+    fn render_vector_field_dxdt<T: Fn(f32) -> f32>(
         &self,
-        dxdt: OrdinaryDegreeOneDiffEq,
+        dxdt: T,
         dt: f32,
+        method: impl Fn(f32, &T, f32) -> f32,
         canvas: &mut Canvas<Window>,
+        color: Color,
     ) {
         let y_pixels_per_unit = self.window_size.1 as f32 / self.axes_size.1;
         let y_offset = y_pixels_per_unit * self.graph_center.1;
@@ -297,9 +302,7 @@ impl GraphWindow {
         let mut lines = Vec::new();
         while t < t_end {
             for x in vec.iter_mut() {
-                // dxdt returns how many units x changes for one unit of t
-                // so we multiply by dt
-                let dx = dxdt(*x) * dt;
+                let dx = method(*x, &dxdt, dt);
                 let abs = dx.abs();
                 min = min.min(abs);
                 max = max.max(abs);
@@ -316,7 +319,78 @@ impl GraphWindow {
         }
 
         let min_color = Color::RED;
-        let max_color = Color::GREEN;
+        let max_color = color;
+
+        let color = |x: f32| -> Color {
+            let grad_val = (x - min) / (max - min);
+
+            Color::RGB(
+                (grad_val * min_color.r as f32) as u8 + ((1. - grad_val) * max_color.r as f32) as u8,
+                (grad_val * min_color.g as f32) as u8 + ((1. - grad_val) * max_color.g as f32) as u8,
+                (grad_val * min_color.b as f32) as u8 + ((1. - grad_val) * max_color.b as f32) as u8,
+            )
+        };
+
+        for (t, x, dx) in lines {
+            canvas.set_draw_color(color(dx));
+            canvas.draw_line(t, x).unwrap();
+        }
+        
+    }
+    fn render_vector_field_dxdt_4th(
+        &self,
+        dxdt: impl Fn(f32) -> f32,
+        dt: f32,
+        canvas: &mut Canvas<Window>,
+        color: Color,
+    ) {
+        let y_pixels_per_unit = self.window_size.1 as f32 / self.axes_size.1;
+        let y_offset = y_pixels_per_unit * self.graph_center.1;
+        let y_t = (self.window_size.1 as f32 / 2.) + y_offset;
+
+        let x_pixels_per_unit = self.window_size.0 as f32 / self.axes_size.0;
+        let x_offset = x_pixels_per_unit * self.graph_center.0;
+        let x_t = (self.window_size.0 as f32 / 2.) - x_offset;
+
+        let x_max =  self.axes_size.1 + self.graph_center.1;
+        let x_end = -self.axes_size.1 + self.graph_center.1;
+
+        let t_beg = (self.graph_center.0 - self.axes_size.0 / 2.0).max(0.0);
+        let t_end = (self.graph_center.0 + self.axes_size.0 / 2.0).max(0.0);
+        // `dxdt` calculates the change in x (the vertical axis) based on the
+        // horizontal axis (t)
+        let mut vec: Vec<f32> = Vec::new();
+        let mut x_val = x_end - (x_end.rem_euclid(self.tick.1));
+        while x_val <= x_max {
+            vec.push(x_val);
+            x_val += self.tick.1;
+        }
+
+        let mut t = t_beg - (t_beg.rem_euclid(self.tick.0));
+        let mut min = f32::INFINITY;
+        let mut max = f32::NEG_INFINITY;
+
+        let mut lines = Vec::with_capacity(vec.len());
+        while t < t_end {
+            for x in vec.iter_mut() {
+                let dx = runge_kutta(*x, &dxdt, dt);
+                let abs = dx.abs();
+                min = min.min(abs);
+                max = max.max(abs);
+                let x_next = *x + dx;
+
+                lines.push((
+                    ((t * x_pixels_per_unit) + x_t, (-*x * y_pixels_per_unit) + y_t),
+                    (((t + dt) * x_pixels_per_unit) + x_t, (-x_next * y_pixels_per_unit) + y_t),
+                    abs
+                ));
+                *x = x_next;
+            }
+            t += dt;
+        }
+
+        let min_color = Color::RED;
+        let max_color = color;
 
         let color = |x: f32| -> Color {
             let grad_val = (x - min) / (max - min);
@@ -384,12 +458,28 @@ impl GraphWindow {
     }
 }
 
+fn euler_method<T: Fn(f32) -> f32>(x: f32, f: &T, dt: f32) -> f32 {
+    f(x) * dt
+}
+
+fn improved_euler_method<T: Fn(f32) -> f32>(x: f32, f: &T, dt: f32) -> f32 {
+    0.5 * (f(x) + f(x + f(x) * dt)) * dt
+}
+
+fn runge_kutta<T: Fn(f32) -> f32>(x: f32, f: &T, dt: f32) -> f32 {
+    let k1 = f(x);
+    let k2 = f(x + (dt / 2.0) * k1);
+    let k3 = f(x + (dt / 2.0) * k2);
+    let k4 = f(x + k3 * dt);
+    (1.0 / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4) * dt
+}
+
 pub fn main() {
     let mut graph = GraphWindow {
         window_size: (1280, 720),
-        axes_size: (12., 9.),
+        axes_size: (12., 6.),
         graph_center: (0.0, 0.0),
-        tick: (0.25, f32::consts::PI / 12.),
+        tick: (0.25, 0.05),
         tick_size: 6.0,
         vec_size: 0.2,
     };
@@ -402,6 +492,64 @@ pub fn main() {
     let mut event_pump = sdl_context.event_pump().unwrap();
     let mut x_state = 0.0;
     let mut y_state = 0.0;
+    let mut ran = false;
+    
+    // graph.render_to_canvas(&mut canvas);
+    // graph.render_vector_field_dxdt(
+    //     |x| x.powi(2) - 2.0,
+    //     0.01,
+    //     runge_kutta,
+    //     &mut canvas,
+    //     Color::GREEN,
+    // );
+    // canvas.present();
+
+    // let event_subsystem = sdl_context.event().unwrap();
+    // event_subsystem.add_event_watch(|event| {
+    //     match event {
+    //         Event::Quit { .. }
+    //         | Event::KeyDown {
+    //             keycode: Some(Keycode::Escape | Keycode::Q),
+    //             ..
+    //         } => std::process::exit(0),
+    //         Event::MouseWheel { y, .. } => {
+    //             graph.axes_size.0 *= (1.05f32).powf(-y);
+    //             graph.axes_size.1 *= (1.05f32).powf(-y);
+    //         }
+    //         Event::MouseMotion {
+    //             mousestate, x, y, ..
+    //         } if mousestate.is_mouse_button_pressed(MouseButton::Left) => {
+    //             let x_units_per_pixel = graph.axes_size.0 / graph.window_size.0 as f32;
+    //             let y_units_per_pixel = graph.axes_size.1 / graph.window_size.1 as f32;
+
+    //             let x_diff = x - x_state;
+    //             let y_diff = y_state - y;
+
+    //             graph.graph_center.0 -= x_diff * x_units_per_pixel;
+    //             graph.graph_center.1 -= y_diff * y_units_per_pixel;
+
+    //             x_state = x;
+    //             y_state = y;
+    //         }
+    //         Event::MouseMotion { x, y, .. } => {
+    //             x_state = x;
+    //             y_state = y;
+    //         }
+    //         _ => {}
+    //     }
+
+    //     graph.render_to_canvas(&mut canvas);
+    //     graph.render_vector_field_dxdt(
+    //         |x| x.powi(2) - 2.0,
+    //         0.01,
+    //         runge_kutta,
+    //         &mut canvas,
+    //         Color::GREEN,
+    //     );
+    //     canvas.present();
+    // });
+
+
     'running: loop {
         for event in event_pump.poll_iter() {
             match event {
@@ -433,7 +581,14 @@ pub fn main() {
                     x_state = x;
                     y_state = y;
                 }
-                _ => {}
+                _ => {
+                    if !ran {
+                        ran = true;
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
             }
         }
 
@@ -464,8 +619,29 @@ pub fn main() {
         // graph.render_vector_field_dxdy(|x| 2.0 * x, &mut canvas);
         // graph.render_line(|x| x.powi(2) - 4.0, &mut canvas, 0.01, Color::BLUE);
         // graph.render_line(|x| 0.333333 * x.powi(3) - 1.2, &mut canvas, 0.01, Color::BLUE);
-        // graph.render_vector_field_dxdt(|x| 1.0 - x.powi(14), 0.01, &mut canvas);
-        graph.render_vector_field_dxdt(|x| f32::sin(x), 0.01, &mut canvas);
+        // graph.render_vector_field_dxdt(|x| 1.0 - f32::sin(x.exp()), 0.01, &mut canvas);
+        // let s: f32 = 0.5;
+        // let a: f32 = 2.;
+        // graph.render_vector_field_dxdt(|x| s * (1.0 - x) * x.powf(a) - (1.0 - s) * x * (1.0 - x).powf(a), 0.01, &mut canvas);
+        // let r = 0.6;
+        // let a = 0.8;
+        // let b = 2.1;
+        // let eq = |x: f32| x + (-x).exp();
+        let dt = 0.01;
+        let a = 1.1;
+        let b = 0.5;
+        let e = 1.0;
+        let s = 1.0;
+        let Q = 0.0;
+        // graph.render_vector_field_dxdt(|x| x * (r - a*(x - b).powi(2)), dt, improved_euler_method, &mut canvas, Color::BLUE);
+        // graph.render_vector_field_dxdt(|x| x * (r - a*(x - b).powi(2)), dt, runge_kutta, &mut canvas, Color::GREEN);
+        // graph.render_vector_field_dxdt(|x| x.powi(2) - 2.0, dt, runge_kutta, &mut canvas, Color::GREEN);
+        graph.render_vector_field_dxdt(|x| (1.0 - (a - b * x)*Q) - e * s * x.powi(4), dt, runge_kutta, &mut canvas, Color::GREEN);
+        // graph.render_vector_field_dxdt_4th(|x| x * (r - a*(x - b).powi(2)), dt, &mut canvas, Color::GREEN);
+        // graph.render_vector_field_dxdt(eq, 0.001, &mut canvas, Color::BLUE);
+        // graph.render_vector_field_dxdt_4th(eq, 0.001, &mut canvas, Color::GREEN);
+        // graph.render_line(|x| f32::sin(x / 2.0), &mut canvas, 0.01, Color::BLUE);
+        // graph.render_line(|x| f32::sin(x.exp()), &mut canvas, 0.01, Color::BLUE);
         canvas.present();
     }
 }
